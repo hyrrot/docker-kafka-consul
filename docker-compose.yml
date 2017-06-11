@@ -1,0 +1,92 @@
+version: '3'
+
+services:
+  consul:
+    image: consul:0.8.4
+    # volumes:
+    #   - /home/docker/consul/data:/consul/data
+    #   - /home/docker/consul/config:/consul/config
+    container_name: consul
+    network_mode: "host"
+    ports:
+      - "8400:8400"
+      - "8500:8500/tcp"
+      - "8600:8600/udp"
+      - "8600:8600/tcp"
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == host1
+    environment:
+      - CONSUL_BOOTSTRAP_SERVER=${CONSUL_BOOTSTRAP_SERVER}
+      - CONSUL_HOST_IP=${CONSUL_HOST_IP}
+      - CONSUL_DATACENTER=${CONSUL_DATACENTER}
+      - CONSUL_SERVER_MODE=${CONSUL_SERVER_MODE}
+    command: |
+      /bin/sh -c "
+      if [ \"${CONSUL_HOST_IP}\" == \"${CONSUL_BOOTSTRAP_SERVER}\" ] ; then
+        RETRY_JOIN_CMD=\"\"
+      else
+        RETRY_JOIN_CMD=\"-retry-join ${CONSUL_BOOTSTRAP_SERVER}\"
+      fi
+
+      if [ -z \"$CONSUL_SERVER_MODE\" ]; then
+        SERVER_PARAM=\"\"
+      else
+        SERVER_PARAM=\"-server -bootstrap-expect 3\"
+      fi
+
+      consul agent $${SERVER_PARAM} -ui \\
+      -bind 0.0.0.0  -client 0.0.0.0 -advertise ${CONSUL_HOST_IP} \\
+      -datacenter ${CONSUL_DATACENTER} -data-dir /consul/data -log-level=debug \\
+      $${RETRY_JOIN_CMD} "
+  dnsmasq:
+    image: andyshinn/dnsmasq:2.76
+    container_name: dnsmasq
+    network_mode: "host"
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+    - consul
+    environment:
+      - DNSMASQ_HOST_IP=${DNSMASQ_HOST_IP}
+    command: "-S /consul/${DNSMASQ_HOST_IP}#8600"
+  registrator:
+    image: gliderlabs/registrator:v7
+    environment:
+      - REGISTRATOR_HOST_IP=${REGISTRATOR_HOST_IP}
+    command: "-ip ${REGISTRATOR_HOST_IP} consul://${REGISTRATOR_HOST_IP}:8500"
+    container_name: registrator
+    hostname: ${REGISTRATOR_HOST_IP}
+    depends_on:
+    - consul
+    volumes:
+    - /var/run/docker.sock:/tmp/docker.sock
+  kafka-zk:
+    image: hyrrot/kafka:2.10-0.10.2.1
+    environment:
+      - ZK_ENDPOINTS=${ZK_ENDPOINTS}
+    command: |
+      bash -c "
+        echo "tickTime=2000" >> /root/kafka/config/zookeeper.properties
+        echo "initLimit=5" >> /root/kafka/config/zookeeper.properties
+        echo "syncLimit=2" >> /root/kafka/config/zookeeper.properties
+      
+      "
+    depends_on:
+    - consul
+    volumes:
+    - /var/run/docker.sock:/tmp/docker.sock
+
+
+
+
+
+  # kafka-broker:
+  #   build: .
+  #   ports:
+  #    - "5000:5000"
